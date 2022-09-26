@@ -28,10 +28,12 @@ The only lines that must be altered by the end user are in *setup.py lines 29:30
 + MEX Melacom warmup time (hardcoded to output 15 minutes)
 + Climbing rate of tangent point to M2 ionospheric peak (km/s)
 + Grazing Angle of occultation profile (degrees) 
-
+![Example Excel Output file when the example inputFile.txt is used](/images/exampleoutput.png)
 
 >Any of these outputs can be verified with WebGeoCalc (https://wgc.jpl.nasa.gov:8443/webgeocalc/#NewCalculation).
-![Example Excel Output file when the example inputFile.txt is used](/images/exampleoutput.png)
+
+
+
 *This project has been written for mutual radio occultation of the Martian atmosphere. Where radio signals are  sent from Mars Express (MEx) to ExoMars' Trace Gas Orbiter (TGO). This can be treated as an example, where the satellites and even the planet are up to the end user's discretion. Fortunately, with the SPICE toolset, everything in the analysis can be changed with simple alterations of the starting variables.*
 
 
