@@ -1,6 +1,6 @@
 
 # MEX-TGO Mutual Radio Occultation Geometry Analyser
-![Cartoon of Profile formed between MEX and TGO, made with a custom Cosmographia tool](/images/Coverimage.png)
+![Cartoon of Profile formed between MEX and TGO, made with a custom Cosmographia tool](https://github.com/JacobParrott/Mutual_Radio_Occultation_Geometry_Analyser/blob/main/images/CoverImage.png)
 ## A tool to analyse occultation geometry to aid in observation planning.
 
 ## Usage
