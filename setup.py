@@ -91,7 +91,7 @@ def setup():
 
         #output to a pandas dataframe
         occs.loc[line,'DoY'] = DoY
-        occs.loc[line,'Date'] = line[:11]
+        occs.loc[line,'Date'] = line[1:11]
         occs.loc[line,'StartUTC'] = date_time[0]
         occs.loc[line,'OccUTC'] = date_time[1]
         occs.loc[line,'EndUTC'] = date_time[2]
