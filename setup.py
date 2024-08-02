@@ -42,8 +42,8 @@ def setup():
 
     for line in lines:    
         #convert european format to us SPICE format
-        SPICEInput = line[4:7] + line[1:4] + line[7:20]
-        duration = int(line[21:24])
+        SPICEInput = line[4:7] + line[1:4] + line[7:18]
+        duration = int(line[19:22])
         print('Now Processing: ',SPICEInput)
 
         #Input times do not state the exact moment occultation occures.  
@@ -62,11 +62,15 @@ def setup():
         spice.gfoclt('ANY', sv.front, sv.fshape, sv.fframe, sv.target,
                     sv.bshape, '', sv.abcorr, sv.obs, sv.stepsz, window, occwindow)
         winsiz = spice.wncard(occwindow)  # Find cardinality (number of windows)
+        if winsiz==0:
+            print('No Occultation Present')
+            continue
 
         for i in range(winsiz):
             [ingress, egress] = spice.wnfetd(occwindow, i) # extract the begining and ends of the windows
         OccultationEpoch = ingress if scheme =='ingress' else egress 
-
+        UTCActualOcc = spice.et2utc(OccultationEpoch,'C',3)
+        print(f'\t Occulatation at {UTCActualOcc}')
         profile, lowesttime, highesttime, platuauTime, GrazingAngle, maxVelDop,startDistance,endDistance, maxAlt  = main.Profiler(start,duration,scheme, sv)
 
         AngleTGOStart ,AngleTGOEnd,AngleMEXStart,AngleMEXEnd,startDistance, endDistance= main.PointingAngles(start,duration,sv)
@@ -113,7 +117,7 @@ def setup():
 
 
     # FYI -will not save to exel file if it is open in another window
-    occs.to_excel("OccultationGeometryOutput.xlsx")
+    occs.to_excel("OccultationGeometryOutput1.xlsx")
 
 
 
