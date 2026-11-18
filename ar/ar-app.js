@@ -222,12 +222,42 @@ function updateHud(s, visible) {
   $('state').textContent = s.blocked ? 'TGO behind Mars' : s.inTest ? 'Sounding the atmosphere' : 'Link clear';
   $('alt').textContent = s.alt !== null && s.alt < 1500 ? `${s.alt.toFixed(0)} km` : '—';
   const sec = Math.abs(s.tRel);
-  $('trel').textContent = `T${s.tRel < 0 ? '−' : '+'}${String(Math.floor(sec / 60)).padStart(2, '0')}:${String(Math.floor(sec % 60)).padStart(2, '0')} from ${data.type}${playing ? '' : ' · paused'}`;
-  $('prog').style.width = `${((t - tStart) / (tEnd - tStart)) * 100}%`;
+  $('trel').textContent = `T${s.tRel < 0 ? '−' : '+'}${String(Math.floor(sec / 60)).padStart(2, '0')}:${String(Math.floor(sec % 60)).padStart(2, '0')} from ${data.type}`;
+  $('tip').textContent = playing || scrub.classList.contains('dragging') ? 'drag to scrub · tap to pause' : 'paused · tap to play';
+  const pct = `${((t - tStart) / (tEnd - tStart)) * 100}%`;
+  $('prog').style.width = pct;
+  $('knob').style.left = pct;
 }
 
 renderer.domElement.addEventListener('click', () => { playing = !playing; });
 $('hud').addEventListener('click', () => { playing = !playing; });
+
+// drag the progress bar to scrub; playback pauses while dragging and resumes afterwards if it was running
+const scrub = $('scrub');
+let resumeAfterScrub = false;
+function scrubTo(e) {
+  const r = scrub.getBoundingClientRect();
+  t = tStart + THREE.MathUtils.clamp((e.clientX - r.left) / r.width, 0, 1) * (tEnd - tStart);
+  hold = 0;
+}
+scrub.addEventListener('pointerdown', (e) => {
+  if (!data) return;
+  scrub.setPointerCapture(e.pointerId);
+  scrub.classList.add('dragging');
+  resumeAfterScrub = playing;
+  playing = false;
+  scrubTo(e);
+});
+scrub.addEventListener('pointermove', (e) => { if (scrub.hasPointerCapture(e.pointerId)) scrubTo(e); });
+const endScrub = (e) => {
+  if (!scrub.classList.contains('dragging')) return;
+  scrub.releasePointerCapture(e.pointerId);
+  scrub.classList.remove('dragging');
+  playing = resumeAfterScrub;
+};
+scrub.addEventListener('pointerup', endScrub);
+scrub.addEventListener('pointercancel', endScrub);
+scrub.addEventListener('click', (e) => e.stopPropagation());   // not a tap-to-pause
 
 // ---------------------------------------------------------------- loop
 let last = performance.now();
