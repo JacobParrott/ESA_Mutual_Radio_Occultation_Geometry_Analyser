@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<link rel="icon" href="data:,">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>MEX–TGO Occultation AR</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --panel: rgba(8, 11, 18, 0.72);
+    --border: rgba(140, 170, 220, 0.2);
+    --text: #eef2f8;
+    --muted: #9aa6bb;
+    --mex: #6fb7ff;
+    --tgo: #ffc857;
+    --link: #7cf2d6;
+    --blocked: #ff4d5e;
+    --trace: #ff9a3c;
+  }
+  html { background: #000; }  /* only the root: a body background would paint over AR.js's z-index:-2 video */
+  html, body { margin: 0; height: 100%; overflow: hidden; color: var(--text);
+    font: 14px/1.35 Inter, "Helvetica Neue", Arial, sans-serif; -webkit-user-select: none; user-select: none; }
+  #gl { position: absolute; top: 0; left: 0; z-index: 0; touch-action: manipulation; }
+  .mono { font-family: "JetBrains Mono", ui-monospace, Menlo, monospace; font-variant-numeric: tabular-nums; }
+
+  #title { position: fixed; z-index: 10; top: max(12px, env(safe-area-inset-top)); left: 12px; right: 12px;
+    padding: 10px 14px; background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+    backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); }
+  #title h1 { margin: 0; font-size: 15px; font-weight: 700; }
+  #title .sub { color: var(--muted); font-size: 12px; margin-top: 1px; }
+
+  #hint { position: fixed; z-index: 10; left: 50%; top: 50%; transform: translate(-50%, -50%);
+    padding: 14px 18px; border-radius: 14px; background: var(--panel); border: 1px solid var(--border);
+    text-align: center; font-weight: 600; max-width: 260px; transition: opacity 0.3s; }
+  #hint .frame { width: 84px; height: 84px; margin: 4px auto 10px; border: 2px dashed rgba(255,255,255,0.55); border-radius: 10px; }
+  #hint .small { color: var(--muted); font-weight: 400; font-size: 12.5px; margin-top: 4px; }
+  #hint.hidden { opacity: 0; pointer-events: none; }
+
+  #hud { position: fixed; z-index: 10; left: 12px; right: 12px; bottom: max(12px, env(safe-area-inset-bottom));
+    padding: 10px 14px 12px; background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+    backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); }
+  #hud .row { display: flex; align-items: center; gap: 8px; }
+  #hud .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--link); box-shadow: 0 0 10px var(--link); flex: none; }
+  #hud.blocked .dot { background: var(--blocked); box-shadow: 0 0 10px var(--blocked); }
+  #state { font-weight: 600; font-size: 13px; letter-spacing: 0.03em; text-transform: uppercase; flex: 1; }
+  #alt { font-size: 18px; }
+  #hud .bar { position: relative; height: 6px; margin: 10px 0 6px; border-radius: 3px; background: rgba(255,255,255,0.12); }
+  #prog { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 3px; background: var(--link); width: 0; }
+  #hud.blocked #prog { background: var(--blocked); }
+  #occMark { position: absolute; top: -4px; bottom: -4px; width: 2px; background: var(--trace); }
+  #hud .meta { display: flex; justify-content: space-between; color: var(--muted); font-size: 12px; }
+  #hud .legend { display: flex; gap: 12px; margin-top: 6px; font-size: 11.5px; color: var(--muted); flex-wrap: wrap; }
+  #hud .legend i { display: inline-block; width: 12px; height: 3px; border-radius: 2px; vertical-align: middle; margin-right: 4px; }
+
+  #error { position: fixed; z-index: 20; inset: 0; display: none; place-items: center; padding: 24px; text-align: center;
+    background: rgba(0,0,0,0.85); }
+  #error.show { display: grid; }
+</style>
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+<div id="title">
+  <h1>Mutual Radio Occultation</h1>
+  <div class="sub"><b style="color:var(--mex)">Mars Express</b> ↔ <b style="color:var(--tgo)">ExoMars TGO</b> · <span id="date">loading…</span></div>
+</div>
+
+<div id="hint">
+  <div class="frame"></div>
+  Point your camera at the marker
+  <div class="small" id="hintSub">Starting camera…</div>
+</div>
+
+<div id="hud">
+  <div class="row"><span class="dot"></span><span id="state">Link clear</span><span id="alt" class="mono">—</span></div>
+  <div class="bar"><div id="prog"></div><div id="occMark"></div></div>
+  <div class="meta"><span id="trel" class="mono">—</span><span>tap to pause</span></div>
+  <div class="legend">
+    <span><i style="background:var(--link)"></i>radio link</span>
+    <span><i style="background:var(--blocked)"></i>blocked by Mars</span>
+    <span><i style="background:var(--trace)"></i>tangent point profile</span>
+  </div>
+</div>
+
+<div id="error"><div id="errorMsg"></div></div>
+
+<script type="module" src="ar-app.js"></script>
+</body>
+</html>

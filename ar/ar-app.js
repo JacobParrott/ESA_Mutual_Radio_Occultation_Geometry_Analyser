@@ -1,0 +1,196 @@
+// AR viewer: the OccultationScene from ../sim.js anchored to an ARToolKit pattern marker via AR.js (three.js build).
+//
+// URL options (all optional):
+//   occ=6           forecast row to show
+//   patt=markers/patt.hiro   pattern file of the printed marker
+//   mars=0.4        Mars radius in marker widths
+//   lift=0.5        Mars centre height in front of the marker, in marker widths
+//   speed=20        playback speed (× real time)
+//   debug           show ARToolKit's detection canvas
+import * as THREE from 'three';
+import { ArToolkitSource, ArToolkitContext, ArMarkerControls, ArSmoothedControls } from './lib/ar-threex.mjs';
+import { OccultationScene, loadOccultation } from '../sim.js';
+
+const params = new URLSearchParams(location.search);
+const cfg = {
+  occ: +(params.get('occ') ?? 6),
+  patt: params.get('patt') ?? 'markers/patt.hiro',
+  mars: +(params.get('mars') ?? 0.4),
+  lift: +(params.get('lift') ?? 0.5),
+  speed: +(params.get('speed') ?? 20),
+  debug: params.has('debug'),
+};
+const PAD = 30;          // seconds shown either side of the test window
+const END_HOLD = 2.5;    // seconds to hold the final frame before looping
+
+const $ = (id) => document.getElementById(id);
+
+// ---------------------------------------------------------------- three.js
+const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+renderer.setClearColor(0x000000, 0);
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.domElement.id = 'gl';
+document.body.prepend(renderer.domElement);
+
+const scene = new THREE.Scene();
+const camera = new THREE.Camera();      // projection comes from the ARToolKit calibration
+scene.add(camera);
+
+const markerRoot = new THREE.Group();   // raw pose written by ArMarkerControls
+const anchor = new THREE.Group();       // smoothed pose that the content hangs from
+scene.add(markerRoot, anchor);
+const smoother = new ArSmoothedControls(anchor, { lerpPosition: 0.35, lerpQuaternion: 0.3, lerpScale: 1, minUnvisibleDelay: 0.6 });
+
+const stage = new THREE.Group();        // turns the occultation geometry to face out of the poster
+anchor.add(stage);
+const sim = new OccultationScene({ assetBase: '../assets/', modelTexturePath: '../assets/models/mobile/' });
+stage.add(sim.root);
+
+// ---------------------------------------------------------------- content
+let data = null;
+let t = 0, tStart = 0, tEnd = 0, hold = 0;
+let playing = true;
+
+async function loadContent() {
+  await sim.init();
+  const index = await (await fetch('../data/index.json')).json();
+  const entry = index.find((e) => e.id === cfg.occ) ?? index[0];
+  data = await loadOccultation(`../data/${entry.file}`);
+  sim.setData(data);
+  sim.setVisible({ orbits: true, iono: true, boresights: false, labels: true, trace: true });
+  sim.setLabelSize(0.045);
+  tStart = Math.max(0, data.etStart - data.et0 - PAD);
+  tEnd = Math.min(sim.duration, data.etEnd - data.et0 + PAD);
+  t = tStart;
+  orientStage();
+  $('date').textContent = `${data.occUTC.slice(0, 10)} · ${data.type}`;
+  $('occMark').style.left = `${((data.etOcc - data.et0 - tStart) / (tEnd - tStart)) * 100}%`;
+}
+
+// Marker axes (AR.js): +Y out of the marker towards the viewer, -Z towards the top edge of the printed image.
+// Point the link-plane normal (the edge-on "overview" direction, on the sunlit side) out of the poster and
+// keep Mars' north pole as close to the top of the marker as possible.
+function orientStage() {
+  sim.update(data.etOcc - data.et0);
+  const i = Math.round((data.etOcc - data.et0) / data.step);
+  const mex = new THREE.Vector3().fromArray(data.mex, 3 * i).applyMatrix4(sim.frame.matrix);
+  const tgo = new THREE.Vector3().fromArray(data.tgo, 3 * i).applyMatrix4(sim.frame.matrix);
+  const sun = sim.sun.position.clone().normalize();
+  const out = new THREE.Vector3().crossVectors(mex, tgo).normalize();
+  if (out.dot(sun) < 0) out.negate();
+  out.addScaledVector(sun, 0.25).normalize();
+  const north = new THREE.Vector3(0, 1, 0).projectOnPlane(out).normalize();
+  const z = north.clone().negate();
+  const x = new THREE.Vector3().crossVectors(out, z);
+  stage.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(x, out, z)).invert();
+  stage.position.set(0, cfg.lift, 0);
+  sim.setRootScale(cfg.mars / data.radii[0]);
+}
+
+// ---------------------------------------------------------------- AR.js
+const source = new ArToolkitSource({ sourceType: 'webcam', sourceWidth: 1280, sourceHeight: 960 });
+let context = null;
+let trackedAspect = 0;
+
+function startTracking() {
+  // size ARToolKit's analysis canvas to the real video aspect (AR.js assumes 4:3 landscape, which misplaces the
+  // overlay on phones held upright) and pick the matching calibration
+  const video = source.domElement;
+  const w = video.videoWidth, h = video.videoHeight;
+  const k = 640 / Math.max(w, h);
+  context?.dispose();
+  context = new ArToolkitContext({
+    cameraParametersUrl: h > w ? 'markers/camera_para_portrait.dat' : 'markers/camera_para.dat',
+    detectionMode: 'mono',
+    maxDetectionRate: 30,
+    canvasWidth: Math.round(w * k),
+    canvasHeight: Math.round(h * k),
+    debug: cfg.debug,
+  });
+  context.init(() => {
+    camera.projectionMatrix.copy(context.getProjectionMatrix());
+    camera.projectionMatrixInverse.copy(camera.projectionMatrix).invert();
+  });
+  new ArMarkerControls(context, markerRoot, { type: 'pattern', patternUrl: cfg.patt, changeMatrixMode: 'modelViewMatrix' });
+  trackedAspect = w / h;
+}
+
+function onResize() {
+  const video = source.domElement;
+  if (!source.ready || !video?.videoWidth) return;
+  source.onResizeElement();                     // video covers the window (cropped, aspect kept)
+  const s = video.style;
+  const el = renderer.domElement;
+  // overlay exactly the same box as the video so the projection lines up
+  Object.assign(el.style, { width: s.width, height: s.height, marginLeft: s.marginLeft, marginTop: s.marginTop });
+  const w = parseFloat(s.width), h = parseFloat(s.height);
+  renderer.setSize(w, h, false);
+  sim.setResolution(w * renderer.getPixelRatio(), h * renderer.getPixelRatio());
+  if (Math.abs(video.videoWidth / video.videoHeight - trackedAspect) > 0.01) startTracking();
+}
+
+function startCamera() {
+  return new Promise((resolve, reject) => {
+    source.init(() => {
+      const video = source.domElement;
+      const ready = () => { onResize(); resolve(); };
+      if (video.videoWidth) ready(); else video.addEventListener('loadedmetadata', ready, { once: true });
+      video.addEventListener('resize', onResize);  // camera stream rotates with the phone
+    }, (err) => reject(new Error(err?.message || 'camera unavailable')));
+  });
+}
+window.addEventListener('resize', () => setTimeout(onResize, 300));
+
+// ---------------------------------------------------------------- HUD
+function updateHud(s, visible) {
+  $('hint').classList.toggle('hidden', visible);
+  $('hud').classList.toggle('blocked', s.blocked);
+  $('state').textContent = s.blocked ? 'TGO behind Mars' : s.inTest ? 'Sounding the atmosphere' : 'Link clear';
+  $('alt').textContent = s.alt !== null && s.alt < 1500 ? `${s.alt.toFixed(0)} km` : '—';
+  const sec = Math.abs(s.tRel);
+  $('trel').textContent = `T${s.tRel < 0 ? '−' : '+'}${String(Math.floor(sec / 60)).padStart(2, '0')}:${String(Math.floor(sec % 60)).padStart(2, '0')} from ${data.type}${playing ? '' : ' · paused'}`;
+  $('prog').style.width = `${((t - tStart) / (tEnd - tStart)) * 100}%`;
+}
+
+renderer.domElement.addEventListener('click', () => { playing = !playing; });
+$('hud').addEventListener('click', () => { playing = !playing; });
+
+// ---------------------------------------------------------------- loop
+let last = performance.now();
+function frame(now) {
+  const dt = Math.min((now - last) / 1000, 0.1);
+  last = now;
+  if (context?.arController && source.ready) context.update(source.domElement);
+  smoother.update(markerRoot);
+
+  if (playing) {
+    if (t < tEnd) t = Math.min(tEnd, t + dt * cfg.speed);
+    else if ((hold += dt) > END_HOLD) { t = tStart; hold = 0; }
+  }
+  updateHud(sim.update(t), anchor.visible);
+  renderer.render(scene, camera);
+  requestAnimationFrame(frame);
+}
+
+function fail(msg) {
+  $('errorMsg').innerHTML = msg;
+  $('error').classList.add('show');
+}
+
+(async () => {
+  if (!window.isSecureContext) {
+    fail('The camera needs a secure page.<br>Open this over <b>https://</b> (or localhost).');
+    return;
+  }
+  try {
+    await Promise.all([loadContent(), startCamera()]);
+    $('hintSub').textContent = 'Use the marker on the poster';
+    requestAnimationFrame(frame);
+  } catch (err) {
+    console.error(err);
+    fail(`Could not start: ${err.message}`);
+  }
+})();
+
+window.__ar = { sim, anchor, markerRoot, stage, camera, cfg, get context() { return context; }, get t() { return t; }, set t(v) { t = v; }, setPlaying(p) { playing = p; } };
