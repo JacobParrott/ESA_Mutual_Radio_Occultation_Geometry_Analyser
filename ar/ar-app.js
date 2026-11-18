@@ -60,7 +60,9 @@ class OneEuro {
   static alpha(cutoff, dt) { return 1 / (1 + 1 / (2 * Math.PI * cutoff * dt)); }
   reset() { this.x = null; }
   filter(x, dt) {
-    if (!this.x) { this.x = x.slice(); this.dx = x.map(() => 0); return this.x; }
+    // phones can deliver two frames with the same timestamp; dt = 0 would turn the state into NaN for good
+    dt = Math.max(dt, 1 / 240);
+    if (!this.x?.every(Number.isFinite)) { this.x = x.slice(); this.dx = x.map(() => 0); return this.x; }
     const ad = OneEuro.alpha(this.dCutoff, dt);
     this.dx = this.dx.map((d, i) => d + ad * ((x[i] - this.x[i]) / dt - d));
     const a = OneEuro.alpha(this.minCutoff + this.beta * Math.hypot(...this.dx), dt);
@@ -230,7 +232,7 @@ $('hud').addEventListener('click', () => { playing = !playing; });
 // ---------------------------------------------------------------- loop
 let last = performance.now();
 function frame(now) {
-  const dt = Math.min((now - last) / 1000, 0.1);
+  const dt = THREE.MathUtils.clamp((now - last) / 1000, 0, 0.1);
   last = now;
   if (context?.arController && source.ready) context.update(source.domElement);
   updatePose(dt);
