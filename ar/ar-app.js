@@ -3,21 +3,29 @@
 // URL options (all optional):
 //   occ=6           forecast row to show
 //   patt=markers/patt.hiro   pattern file of the printed marker
-//   mars=0.4        Mars radius in marker widths
-//   lift=0.5        Mars centre height in front of the marker, in marker widths
+//   mars=1.0        Mars radius in marker widths
+//   lift=0.3        Mars centre height in front of the marker, in marker widths
+//   focus=0.7       what sits over the marker: 0 = Mars' centre, 1 = the limb point where the ray grazes
 //   speed=20        playback speed (× real time)
+//   sc=30000        spacecraft size exaggeration
+//   smooth=1        pose smoothing strength (2 = steadier but laggier, 0.5 = snappier, 0 = off)
+//   res=960         long side (px) of the image ARToolKit analyses; higher = steadier corners, more CPU
 //   debug           show ARToolKit's detection canvas
 import * as THREE from 'three';
-import { ArToolkitSource, ArToolkitContext, ArMarkerControls, ArSmoothedControls } from './lib/ar-threex.mjs';
+import { ArToolkitSource, ArToolkitContext, ArMarkerControls } from './lib/ar-threex.mjs';
 import { OccultationScene, loadOccultation } from '../sim.js';
 
 const params = new URLSearchParams(location.search);
 const cfg = {
   occ: +(params.get('occ') ?? 6),
   patt: params.get('patt') ?? 'markers/patt.hiro',
-  mars: +(params.get('mars') ?? 0.4),
-  lift: +(params.get('lift') ?? 0.5),
+  mars: +(params.get('mars') ?? 1.0),
+  lift: +(params.get('lift') ?? 0.3),
+  focus: +(params.get('focus') ?? 0.7),
   speed: +(params.get('speed') ?? 20),
+  sc: +(params.get('sc') ?? 30000),
+  smooth: +(params.get('smooth') ?? 1),
+  res: +(params.get('res') ?? 960),
   debug: params.has('debug'),
 };
 const PAD = 30;          // seconds shown either side of the test window
@@ -39,8 +47,63 @@ scene.add(camera);
 
 const markerRoot = new THREE.Group();   // raw pose written by ArMarkerControls
 const anchor = new THREE.Group();       // smoothed pose that the content hangs from
+anchor.visible = false;
 scene.add(markerRoot, anchor);
-const smoother = new ArSmoothedControls(anchor, { lerpPosition: 0.35, lerpQuaternion: 0.3, lerpScale: 1, minUnvisibleDelay: 0.6 });
+
+// ---------------------------------------------------------------- pose smoothing
+// One Euro filter (Casiez et al., CHI 2012): a low-pass whose cutoff rises with speed, so the model is held
+// steady while the phone is nearly still (where jitter shows) but still follows deliberate movement promptly.
+class OneEuro {
+  constructor(minCutoff, beta, dCutoff = 1) {
+    Object.assign(this, { minCutoff, beta, dCutoff, x: null, dx: null });
+  }
+  static alpha(cutoff, dt) { return 1 / (1 + 1 / (2 * Math.PI * cutoff * dt)); }
+  reset() { this.x = null; }
+  filter(x, dt) {
+    if (!this.x) { this.x = x.slice(); this.dx = x.map(() => 0); return this.x; }
+    const ad = OneEuro.alpha(this.dCutoff, dt);
+    this.dx = this.dx.map((d, i) => d + ad * ((x[i] - this.x[i]) / dt - d));
+    const a = OneEuro.alpha(this.minCutoff + this.beta * Math.hypot(...this.dx), dt);
+    this.x = this.x.map((v, i) => v + a * (x[i] - v));
+    return this.x;
+  }
+}
+
+const pose = {
+  // positions are in marker widths (camera space), rotations as quaternion components
+  pos: new OneEuro(1.2 / cfg.smooth, 0.8),
+  rot: new OneEuro(0.5 / cfg.smooth, 1.2),
+  lostFor: 0,
+  jumpFrames: 0,
+  p: new THREE.Vector3(), q: new THREE.Quaternion(), s: new THREE.Vector3(),
+};
+const HOLD_LOST = 0.6;     // s to keep showing the last pose after the marker drops out
+const FLIP_DEG = 20;       // a sudden rotation larger than this ...
+const FLIP_FRAMES = 6;     // ... must persist this many frames before it is believed (square-marker pose flips)
+
+function updatePose(dt) {
+  if (!markerRoot.visible) {
+    pose.lostFor += dt;
+    if (pose.lostFor > HOLD_LOST) { anchor.visible = false; pose.pos.reset(); pose.rot.reset(); }
+    return;
+  }
+  pose.lostFor = 0;
+  markerRoot.matrix.decompose(pose.p, pose.q, pose.s);
+  if (cfg.smooth <= 0 || !anchor.visible) {
+    pose.pos.reset(); pose.rot.reset();
+  } else if (pose.rot.x) {
+    const prev = new THREE.Quaternion().fromArray(pose.rot.x);
+    if (prev.dot(pose.q) < 0) pose.q.set(-pose.q.x, -pose.q.y, -pose.q.z, -pose.q.w);  // same hemisphere
+    if (THREE.MathUtils.radToDeg(prev.angleTo(pose.q)) > FLIP_DEG) {
+      if (++pose.jumpFrames < FLIP_FRAMES) { anchor.visible = true; return; }   // ignore a one-off flip
+      pose.pos.reset(); pose.rot.reset();                                       // genuine: snap to it
+    }
+    pose.jumpFrames = 0;
+  }
+  anchor.position.fromArray(pose.pos.filter(pose.p.toArray(), dt));
+  anchor.quaternion.fromArray(pose.rot.filter(pose.q.toArray(), dt)).normalize();
+  anchor.visible = true;
+}
 
 const stage = new THREE.Group();        // turns the occultation geometry to face out of the poster
 anchor.add(stage);
@@ -59,7 +122,9 @@ async function loadContent() {
   data = await loadOccultation(`../data/${entry.file}`);
   sim.setData(data);
   sim.setVisible({ orbits: true, iono: true, boresights: false, labels: true, trace: true });
-  sim.setLabelSize(0.045);
+  sim.setLabelSize(0.05);
+  sim.setScScale(cfg.sc);
+  for (const m of sim.lineMaterials) m.linewidth *= 1.6;   // thicker lines read better on a phone
   tStart = Math.max(0, data.etStart - data.et0 - PAD);
   tEnd = Math.min(sim.duration, data.etEnd - data.et0 + PAD);
   t = tStart;
@@ -84,8 +149,14 @@ function orientStage() {
   const z = north.clone().negate();
   const x = new THREE.Vector3().crossVectors(out, z);
   stage.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(x, out, z)).invert();
-  stage.position.set(0, cfg.lift, 0);
-  sim.setRootScale(cfg.mars / data.radii[0]);
+  const scale = cfg.mars / data.radii[0];
+  sim.setRootScale(1);
+  // centre the composition on the limb where the ray grazes, not on Mars' centre (cfg.focus of the way there)
+  sim.root.updateMatrixWorld(true);
+  const tan = sim.root.worldToLocal(sim.tanMarker.getWorldPosition(new THREE.Vector3()));
+  const shift = tan.multiplyScalar(cfg.focus * scale).applyQuaternion(stage.quaternion);
+  stage.position.set(-shift.x, cfg.lift - shift.y, -shift.z);
+  sim.setRootScale(scale);
 }
 
 // ---------------------------------------------------------------- AR.js
@@ -98,7 +169,7 @@ function startTracking() {
   // overlay on phones held upright) and pick the matching calibration
   const video = source.domElement;
   const w = video.videoWidth, h = video.videoHeight;
-  const k = 640 / Math.max(w, h);
+  const k = Math.min(1, cfg.res / Math.max(w, h));
   context?.dispose();
   context = new ArToolkitContext({
     cameraParametersUrl: h > w ? 'markers/camera_para_portrait.dat' : 'markers/camera_para.dat',
@@ -162,7 +233,7 @@ function frame(now) {
   const dt = Math.min((now - last) / 1000, 0.1);
   last = now;
   if (context?.arController && source.ready) context.update(source.domElement);
-  smoother.update(markerRoot);
+  updatePose(dt);
 
   if (playing) {
     if (t < tEnd) t = Math.min(tEnd, t + dt * cfg.speed);
