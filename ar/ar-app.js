@@ -2,7 +2,9 @@
 //
 // URL options (all optional):
 //   occ=6           forecast row to show
-//   patt=markers/patt.hiro   pattern file of the printed marker
+//   patt=markers/patt.qr     pattern file of the printed marker (patt.hiro + ratio=0.5 for the Hiro test marker)
+//   ratio=0.8222    pattern ratio: width of the marker's inner pattern / width of its dark border square
+//   thresh=otsu     how ARToolKit separates dark from light: otsu (automatic, per frame), adaptive (local), or 0-255
 //   mars=1.0        Mars radius in marker widths
 //   lift=0.3        Mars centre height in front of the marker, in marker widths
 //   focus=0.7       what sits over the marker: 0 = Mars' centre, 1 = the limb point where the ray grazes
@@ -18,7 +20,9 @@ import { OccultationScene, loadOccultation } from '../sim.js';
 const params = new URLSearchParams(location.search);
 const cfg = {
   occ: +(params.get('occ') ?? 6),
-  patt: params.get('patt') ?? 'markers/patt.hiro',
+  patt: params.get('patt') ?? 'markers/patt.qr',
+  ratio: +(params.get('ratio') ?? 37 / 45),        // the QR marker: 37 modules inside a 4-module border
+  thresh: params.get('thresh') ?? 'otsu',
   mars: +(params.get('mars') ?? 1.0),
   lift: +(params.get('lift') ?? 0.3),
   focus: +(params.get('focus') ?? 0.7),
@@ -162,6 +166,7 @@ function orientStage() {
 }
 
 // ---------------------------------------------------------------- AR.js
+const AR_THRESH_OTSU = 2, AR_THRESH_ADAPTIVE = 3;   // ARToolKit's AR_LABELING_THRESH_MODE_AUTO_* (not exported by AR.js)
 const source = new ArToolkitSource({ sourceType: 'webcam', sourceWidth: 1280, sourceHeight: 960 });
 let context = null;
 let trackedAspect = 0;
@@ -179,9 +184,14 @@ function startTracking() {
     maxDetectionRate: 30,
     canvasWidth: Math.round(w * k),
     canvasHeight: Math.round(h * k),
+    patternRatio: cfg.ratio,
     debug: cfg.debug,
   });
   context.init(() => {
+    // ARToolKit's default is a fixed threshold of 100; an automatic one follows the room's lighting
+    const mode = { otsu: AR_THRESH_OTSU, adaptive: AR_THRESH_ADAPTIVE }[cfg.thresh];
+    if (mode !== undefined) context.arController.setThresholdMode(mode);
+    else context.arController.setThreshold(+cfg.thresh);
     camera.projectionMatrix.copy(context.getProjectionMatrix());
     camera.projectionMatrixInverse.copy(camera.projectionMatrix).invert();
   });
@@ -288,7 +298,7 @@ function fail(msg) {
   }
   try {
     await Promise.all([loadContent(), startCamera()]);
-    $('hintSub').textContent = 'Use the marker on the poster';
+    $('hintSub').textContent = 'The one on the poster that opened this page';
     requestAnimationFrame(frame);
   } catch (err) {
     console.error(err);
