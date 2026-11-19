@@ -5,8 +5,9 @@
 //   patt=markers/patt.qr     pattern file of the printed marker (patt.hiro + ratio=0.5 for the Hiro test marker)
 //   ratio=0.8222    pattern ratio: width of the marker's inner pattern / width of its dark border square
 //   thresh=otsu     how ARToolKit separates dark from light: otsu (automatic, per frame), adaptive (local), or 0-255
-//   mars=1.0        Mars radius in marker widths
-//   lift=0.3        Mars centre height in front of the marker, in marker widths
+//   size=2.5        overall model size: scales mars and lift together (2.5 = looks as size 1 did from 2.5x closer)
+//   mars=1.0        Mars radius in marker widths (before size)
+//   lift=0.3        Mars centre height in front of the marker, in marker widths (before size)
 //   focus=0.7       what sits over the marker: 0 = Mars' centre, 1 = the limb point where the ray grazes
 //   speed=20        playback speed (× real time)
 //   sc=30000        spacecraft size exaggeration
@@ -23,6 +24,7 @@ const cfg = {
   patt: params.get('patt') ?? 'markers/patt.qr',
   ratio: +(params.get('ratio') ?? 37 / 45),        // the QR marker: 37 modules inside a 4-module border
   thresh: params.get('thresh') ?? 'otsu',
+  size: +(params.get('size') ?? 2.5),
   mars: +(params.get('mars') ?? 1.0),
   lift: +(params.get('lift') ?? 0.3),
   focus: +(params.get('focus') ?? 0.7),
@@ -155,13 +157,13 @@ function orientStage() {
   const z = north.clone().negate();
   const x = new THREE.Vector3().crossVectors(out, z);
   stage.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(x, out, z)).invert();
-  const scale = cfg.mars / data.radii[0];
+  const scale = cfg.size * cfg.mars / data.radii[0];
   sim.setRootScale(1);
   // centre the composition on the limb where the ray grazes, not on Mars' centre (cfg.focus of the way there)
   sim.root.updateMatrixWorld(true);
   const tan = sim.root.worldToLocal(sim.tanMarker.getWorldPosition(new THREE.Vector3()));
   const shift = tan.multiplyScalar(cfg.focus * scale).applyQuaternion(stage.quaternion);
-  stage.position.set(-shift.x, cfg.lift - shift.y, -shift.z);
+  stage.position.set(-shift.x, cfg.size * cfg.lift - shift.y, -shift.z);
   sim.setRootScale(scale);
 }
 
